@@ -1,216 +1,81 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo } from "react";
 import { StyleSheet, View, Button, Alert, Text } from "react-native";
 import { Canvas, Path, Skia } from "@shopify/react-native-skia";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 
 export default function App() {
-  // Helper: Detect stylus/pen input from native event
-  const isStylus = (nativeEvent) => {
-    // Android: toolType === 2, iOS: touchType === 'stylus'
-    return nativeEvent.toolType === 2 || nativeEvent.touchType === "stylus";
-  };
   const [paths, setPaths] = useState([]);
   const [currentPath, setCurrentPath] = useState(null);
-  const [, forceUpdate] = useState(0);
-  const [penReady, setPenReady] = useState(false);
-  const [lastHoverTime, setLastHoverTime] = useState(0);
-
-  const hoverTimer = useRef(null);
-  const penActivationTimer = useRef(null);
 
   const paint = useMemo(() => {
     const p = Skia.Paint();
     p.setColor(Skia.Color("black"));
-    p.setStyle(1);
-    p.setStrokeWidth(2);
-    p.setStrokeCap(1);
-    p.setStrokeJoin(1);
+    p.setStyle(1); // Stroke
+    p.setStrokeWidth(4);
+    p.setStrokeCap(1); // Round
+    p.setStrokeJoin(1); // Round
     return p;
   }, []);
 
-  // Detect pen hover (stylus hovers before touching, fingers don't)
-  const handleMouseEnter = () => {
-    console.log("🖊️ HOVER DETECTED - Pen approaching");
-    setLastHoverTime(Date.now());
-    setPenReady(true);
-
-    // Clear any existing timer
-    if (hoverTimer.current) {
-      clearTimeout(hoverTimer.current);
-    }
-
-    // Keep pen ready for 2 seconds after hover
-    hoverTimer.current = setTimeout(() => {
-      setPenReady(false);
-      console.log("⏰ Hover timeout - Pen no longer ready");
-    }, 2000);
-  };
-
-  const handleMouseLeave = () => {
-    console.log("🖊️ HOVER ENDED - Pen moved away");
-    // Don't immediately disable, give some time for touch
-    if (hoverTimer.current) {
-      clearTimeout(hoverTimer.current);
-    }
-
-    hoverTimer.current = setTimeout(() => {
-      setPenReady(false);
-    }, 500); // 500ms grace period
-  };
-
-  // Alternative: Long press activation
-  const handleLongPress = () => {
-    console.log("🖊️ LONG PRESS - Activating pen mode");
-    setPenReady(true);
-
-    Alert.alert("Pen Mode Activated", "You can now draw for 10 seconds", [
-      { text: "OK", onPress: () => {} },
-    ]);
-
-    // Auto-deactivate after 10 seconds
-    if (penActivationTimer.current) {
-      clearTimeout(penActivationTimer.current);
-    }
-
-    penActivationTimer.current = setTimeout(() => {
-      setPenReady(false);
-      Alert.alert("Pen Mode Expired", "Long press again to reactivate");
-    }, 10000);
-  };
-
-  const handleTouchStart = (evt) => {
-    // Debug: Log nativeEvent properties for diagnosis
-    console.log("nativeEvent:", evt.nativeEvent);
-    // Only allow stylus/pen input if detectable
-    if (!isStylus(evt.nativeEvent)) {
-      // If toolType/touchType is missing, fallback to penReady
-      if (
-        evt.nativeEvent.toolType === undefined &&
-        evt.nativeEvent.touchType === undefined
-      ) {
-        console.log("Stylus detection not available, falling back to penReady");
-      } else {
-        Alert.alert("Pen Required", "Please use a stylus to draw.");
+  const pan = Gesture.Pan()
+    .onBegin((e) => {
+      // Check if the input is from a stylus
+      if (e.pointerType !== "stylus") {
         return;
       }
-    }
-    // ...existing code...
-    const currentTime = Date.now();
-    const timeSinceHover = currentTime - lastHoverTime;
-    console.log("🟢 TOUCH START");
-    console.log("Pen Ready:", penReady);
-    console.log("Time since hover:", timeSinceHover + "ms");
-    if (!penReady) {
-      console.log("🚫 REJECTED: Pen not ready (no hover detected)");
-      Alert.alert(
-        "Pen Required",
-        "Hover with your pen first, or long press to activate pen mode"
-      );
-      return;
-    }
-    if (timeSinceHover < 3000) {
-      console.log("✅ PEN: Recent hover detected, allowing touch");
-    } else {
-      console.log("✅ PEN: Long press activated, allowing touch");
-    }
-    const { locationX, locationY } = evt.nativeEvent;
-    const newPath = Skia.Path.Make();
-    newPath.moveTo(locationX, locationY);
-    setCurrentPath(newPath);
-  };
-
-  const handleTouchMove = (evt) => {
-    if (!penReady || !currentPath) return;
-    if (!isStylus(evt.nativeEvent)) return;
-    const { locationX, locationY } = evt.nativeEvent;
-    currentPath.lineTo(locationX, locationY);
-    forceUpdate((prev) => prev + 1);
-  };
-
-  const handleTouchEnd = (evt) => {
-    if (!penReady || !currentPath) return;
-    if (!isStylus(evt.nativeEvent)) return;
-    console.log("🎨 Drawing completed");
-    setPaths((prev) => [...prev, currentPath]);
-    setCurrentPath(null);
-  };
+      const newPath = Skia.Path.Make();
+      newPath.moveTo(e.x, e.y);
+      setCurrentPath(newPath);
+    })
+    .onUpdate((e) => {
+      if (e.pointerType !== "stylus" || !currentPath) {
+        return;
+      }
+      currentPath.lineTo(e.x, e.y);
+    })
+    .onEnd(() => {
+      if (currentPath) {
+        setPaths((prevPaths) => [...prevPaths, currentPath]);
+      }
+      setCurrentPath(null);
+    })
+    .minDistance(1);
 
   const handleClear = () => {
     setPaths([]);
-    setPenReady(false);
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    if (penActivationTimer.current) clearTimeout(penActivationTimer.current);
+    setCurrentPath(null);
   };
 
-  const handleSave = () => Alert.alert("Saved", "Signature captured!");
-
-  const manualPenActivation = () => {
-    setPenReady(!penReady);
-    if (!penReady) {
-      // Activating
-      Alert.alert("Pen Activated", "You can now draw with your pen");
-      if (penActivationTimer.current) {
-        clearTimeout(penActivationTimer.current);
-      }
-      penActivationTimer.current = setTimeout(() => {
-        setPenReady(false);
-      }, 15000); // 15 seconds
-    } else {
-      // Deactivating
-      if (penActivationTimer.current) {
-        clearTimeout(penActivationTimer.current);
-      }
+  const handleSave = () => {
+    if (paths.length === 0) {
+      Alert.alert("Nothing to Save", "Please draw something first.");
+      return;
     }
+    Alert.alert("Saved", "Signature captured!");
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.statusBar}>
-        <Text style={styles.statusText}>
-          Pen Status: {penReady ? "🟢 READY" : "🔴 NOT READY"}
-        </Text>
+        <Text style={styles.statusText}>Pen-Only Drawing Pad</Text>
         <Text style={styles.instructionText}>
-          {penReady
-            ? "Draw now with your Lenovo pen!"
-            : 'Hover with pen, long press, or tap "Activate Pen"'}
+          Use your stylus to draw on the canvas below.
         </Text>
       </View>
 
-      <View
-        style={[
-          styles.canvas,
-          penReady ? styles.readyCanvas : styles.notReadyCanvas,
-        ]}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        onLongPress={handleLongPress}
-      >
-        <Canvas style={StyleSheet.absoluteFillObject}>
-          {paths.map((p, i) => (
-            <Path key={i} path={p} paint={paint} />
-          ))}
-          {currentPath && <Path path={currentPath} paint={paint} />}
-        </Canvas>
-
-        {!penReady && (
-          <View style={styles.overlay}>
-            <Text style={styles.overlayText}>PEN NOT READY</Text>
-            <Text style={styles.overlaySubtext}>
-              Hover with pen, long press, or use button below
-            </Text>
-          </View>
-        )}
-      </View>
+      <GestureDetector gesture={pan}>
+        <View style={styles.canvas}>
+          <Canvas style={StyleSheet.absoluteFillObject}>
+            {paths.map((p, i) => (
+              <Path key={i} path={p} paint={paint} />
+            ))}
+            {currentPath && <Path path={currentPath} paint={paint} />}
+          </Canvas>
+        </View>
+      </GestureDetector>
 
       <View style={styles.buttons}>
         <Button title="Clear" onPress={handleClear} />
-        <Button
-          title={penReady ? "Deactivate Pen" : "Activate Pen"}
-          onPress={manualPenActivation}
-          color={penReady ? "#FF3B30" : "#007AFF"}
-        />
         <Button title="Save" onPress={handleSave} />
       </View>
     </View>

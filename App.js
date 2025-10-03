@@ -1,17 +1,34 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback, useRef } from "react";
 import { StyleSheet, View, Button, Alert, Text } from "react-native";
 import { Canvas, Path, Skia } from "@shopify/react-native-skia";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from "react-native-gesture-handler";
+import { runOnJS } from "react-native-reanimated";
 
 export default function App() {
   const [paths, setPaths] = useState([]);
   const [currentPath, setCurrentPath] = useState(null);
 
+  // Use a ref to store the path being drawn for worklet access
+  const pathRef = useRef(null);
+
+  const commitPath = useCallback((path) => {
+    setPaths((prevPaths) => [...prevPaths, path]);
+  }, []);
+
+  // Wrap setState calls for use in worklets
+  const updateCurrentPath = useCallback((path) => {
+    setCurrentPath(path);
+  }, []);
+
   const paint = useMemo(() => {
     const p = Skia.Paint();
     p.setColor(Skia.Color("black"));
     p.setStyle(1); // Stroke
-    p.setStrokeWidth(4);
+    p.setStrokeWidth(2);
     p.setStrokeCap(1); // Round
     p.setStrokeJoin(1); // Round
     return p;
@@ -19,56 +36,73 @@ export default function App() {
 
   const pan = Gesture.Pan()
     .onBegin((e) => {
-      // Check if the input is from a stylus
-      if (e.pointerType !== "stylus") {
+      "worklet";
+      const isPen = e.pointerType === 1;
+      if (!isPen) {
         return;
       }
       const newPath = Skia.Path.Make();
       newPath.moveTo(e.x, e.y);
-      setCurrentPath(newPath);
+      pathRef.current = newPath;
+      // Use runOnJS to call setState from worklet
+      runOnJS(updateCurrentPath)(newPath);
     })
     .onUpdate((e) => {
-      if (e.pointerType !== "stylus" || !currentPath) {
+      "worklet";
+      const isPen = e.pointerType === 1;
+      if (!isPen || !pathRef.current) {
         return;
       }
-      currentPath.lineTo(e.x, e.y);
+      // Update the path
+      const path = pathRef.current.copy();
+      path.lineTo(e.x, e.y);
+      pathRef.current = path;
+      // Use runOnJS to call setState from worklet
+      runOnJS(updateCurrentPath)(path);
     })
     .onEnd(() => {
-      if (currentPath) {
-        setPaths((prevPaths) => [...prevPaths, currentPath]);
+      "worklet";
+      if (pathRef.current) {
+        // Use runOnJS to call setState from worklet
+        runOnJS(commitPath)(pathRef.current);
+        pathRef.current = null;
+        runOnJS(updateCurrentPath)(null);
       }
-      setCurrentPath(null);
     })
     .minDistance(1);
 
   const handleClear = () => {
     setPaths([]);
+    pathRef.current = null;
     setCurrentPath(null);
   };
 
   const handleSave = () => {
     if (paths.length === 0) {
-      Alert.alert("Nothing to Save", "Please draw something first.");
+      Alert.alert("Nothing to Save", "Draw something with your stylus first.");
       return;
     }
-    Alert.alert("Saved", "Signature captured!");
+    Alert.alert("Saved", `${paths.length} strokes saved!`);
   };
 
   return (
-    <View style={styles.container}>
+    <GestureHandlerRootView style={styles.container}>
       <View style={styles.statusBar}>
-        <Text style={styles.statusText}>Pen-Only Drawing Pad</Text>
+        <Text style={styles.statusText}>Pen-Only Drawing</Text>
         <Text style={styles.instructionText}>
-          Use your stylus to draw on the canvas below.
+          Only input from a pen will be recognized.
         </Text>
+        <Text style={styles.debugText}>Strokes: {paths.length}</Text>
       </View>
 
       <GestureDetector gesture={pan}>
         <View style={styles.canvas}>
           <Canvas style={StyleSheet.absoluteFillObject}>
+            {/* Render all completed paths */}
             {paths.map((p, i) => (
-              <Path key={i} path={p} paint={paint} />
+              <Path key={`path-${i}`} path={p} paint={paint} />
             ))}
+            {/* Render the current path being drawn */}
             {currentPath && <Path path={currentPath} paint={paint} />}
           </Canvas>
         </View>
@@ -78,7 +112,7 @@ export default function App() {
         <Button title="Clear" onPress={handleClear} />
         <Button title="Save" onPress={handleSave} />
       </View>
-    </View>
+    </GestureHandlerRootView>
   );
 }
 
@@ -104,37 +138,14 @@ const styles = StyleSheet.create({
     marginTop: 5,
     textAlign: "center",
   },
+  debugText: {
+    fontSize: 12,
+    color: "#999",
+    marginTop: 5,
+  },
   canvas: {
     flex: 1,
-    position: "relative",
-  },
-  readyCanvas: {
-    backgroundColor: "#e8f5e8",
-  },
-  notReadyCanvas: {
-    backgroundColor: "#f5f5f5",
-  },
-  overlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.1)",
-  },
-  overlayText: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#666",
-  },
-  overlaySubtext: {
-    fontSize: 14,
-    color: "#888",
-    textAlign: "center",
-    marginTop: 10,
-    paddingHorizontal: 20,
+    backgroundColor: "#f0f0f0",
   },
   buttons: {
     flexDirection: "row",
